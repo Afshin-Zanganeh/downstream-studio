@@ -34,6 +34,8 @@
 .ranking-table table { width:100%; border-collapse:collapse; white-space:nowrap; font-size:11px; }
 .ranking-table th,.ranking-table td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; }
 .ranking-table th { background:#f5f6f8; color:var(--muted); font-size:9px; text-transform:uppercase; }
+.ranking-table th>button { width:100%; padding:0; display:flex; align-items:center; justify-content:flex-start; gap:5px; border:0; background:transparent; color:inherit; font:inherit; text-transform:inherit; cursor:pointer; }
+.ranking-table th>button:hover,.ranking-table th>button.active { color:var(--forest); }
 .ranking-table td:first-child { width:54px; color:var(--muted); text-align:center; }
 .ranking-table td:nth-child(2) { white-space:normal; }
 .ranking-table td:nth-child(2) button { max-width:260px; padding:0; border:0; background:transparent; color:var(--forest); font:inherit; font-weight:700; overflow-wrap:anywhere; cursor:pointer; text-align:left; }
