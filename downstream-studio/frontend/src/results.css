@@ -19,6 +19,21 @@
 .progress-detail { display:flex; justify-content:space-between; gap:18px; color:var(--muted); font-size:11px; }
 .progress-detail strong { color:var(--ink); }
 
+.target-ranking { margin:28px 0 18px; }
+.ranking-head { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; padding-bottom:18px; border-bottom:1px solid var(--line); }
+.ranking-head>div:first-child { min-width:0; }
+.ranking-head>div:first-child>p:last-child { max-width:680px; margin-top:7px; color:var(--muted); font-size:11px; line-height:1.5; }
+.ranking-filters { width:min(420px,44%); display:grid; grid-template-columns:1fr 1fr; gap:10px; flex:0 0 auto; }
+.target-ranking-chart { max-height:680px; margin-top:16px; overflow-y:auto; border-bottom:1px solid var(--line); }
+.ranking-table { margin-top:16px; overflow:auto; border:1px solid var(--line); }
+.ranking-table table { width:100%; border-collapse:collapse; white-space:nowrap; font-size:11px; }
+.ranking-table th,.ranking-table td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; }
+.ranking-table th { background:#f5f6f8; color:var(--muted); font-size:9px; text-transform:uppercase; }
+.ranking-table td:first-child { width:54px; color:var(--muted); text-align:center; }
+.ranking-table td:nth-child(2) { white-space:normal; }
+.ranking-table td:nth-child(2) button { max-width:260px; padding:0; border:0; background:transparent; color:var(--forest); font:inherit; font-weight:700; overflow-wrap:anywhere; cursor:pointer; text-align:left; }
+.ranking-table td:nth-child(2) button:hover { text-decoration:underline; }
+
 .results-toolbar { margin:34px 0 18px; padding-bottom:16px; border-bottom:1px solid var(--line); display:flex; align-items:flex-end; justify-content:space-between; gap:20px; }
 .results-toolbar label { width:230px; }
 .insight-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
@@ -177,6 +192,8 @@
   .progress-main { grid-template-columns:36px 1fr; }
   .progress-time { grid-column:2; text-align:left; }
   .progress-detail,.results-toolbar { align-items:stretch; flex-direction:column; }
+  .ranking-head { align-items:stretch; flex-direction:column; }
+  .ranking-filters { width:100%; grid-template-columns:1fr; }
   .results-toolbar label { width:100%; }
   .insight-grid { grid-template-columns:1fr; }
   .metric-insight { min-height:0; }

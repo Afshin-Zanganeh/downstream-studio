@@ -37,6 +37,8 @@ downstream probes on biological interface embeddings.
 - Filterable results by target, probe, split, and embedding model, with R²
   curves, leaderboards, prediction scatter, residual plots, throughput, and
   downloadable CSV artifacts.
+- Target predictability ranking ordered by the best held-out R², with embedding
+  and probe filters plus Pearson correlation and error context.
 - Experiment history with open, reuse-as-new, and recoverable delete actions.
 - SQLite metadata and filesystem artifacts; no external service is required.
 
