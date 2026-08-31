@@ -39,6 +39,8 @@ downstream probes on biological interface embeddings.
   downloadable CSV artifacts.
 - Target predictability ranking ordered by the best held-out R², with embedding
   and probe filters plus Pearson correlation and error context.
+- Compact per-target Test R², Pearson, and Test MSE charts for comparing
+  training fractions and durations without mixing target units.
 - Experiment history with open, reuse-as-new, and recoverable delete actions.
 - SQLite metadata and filesystem artifacts; no external service is required.
 

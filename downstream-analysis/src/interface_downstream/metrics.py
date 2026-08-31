@@ -17,10 +17,12 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, floa
     target_std = float(np.std(y_true, ddof=0))
     prediction_std = float(np.std(y_pred, ddof=0))
     mae = float(np.mean(np.abs(residual)))
+    mse = float(np.mean(residual**2))
     return {
         "r2": 1.0 - ss_res / ss_tot if ss_tot > 0 else math.nan,
         "mae": mae,
-        "rmse": float(np.sqrt(np.mean(residual**2))),
+        "mse": mse,
+        "rmse": float(np.sqrt(mse)),
         "mae_over_target_std": mae / target_std if target_std > 0 else math.nan,
         "pearson": (
             float(np.corrcoef(y_true, y_pred)[0, 1])
