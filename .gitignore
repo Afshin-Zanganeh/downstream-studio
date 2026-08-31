@@ -1,0 +1,30 @@
+# This repository intentionally contains only the two downstream source packages.
+*
+!.gitignore
+!README.md
+!downstream-analysis/
+!downstream-analysis/**
+!downstream-studio/
+!downstream-studio/**
+
+# Local environments, caches, and generated development state
+**/.DS_Store
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.venv/
+**/node_modules/
+**/dist/
+**/build/
+**/*.egg-info/
+
+# Never version credentials, local databases, datasets, or experiment outputs
+**/.env
+**/.env.*
+!**/.env.example
+**/*.sqlite
+**/*.sqlite3
+**/results/
+**/runs/
+**/uploads/
+**/trash/

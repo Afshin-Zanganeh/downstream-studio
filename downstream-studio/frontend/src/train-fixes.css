@@ -1,0 +1,30 @@
+/* Train-specific containment is isolated here so it remains the final cascade layer. */
+.train-layout,
+.train-layout .builder,
+.train-layout .run-sidebar,
+.train-layout .builder-section,
+.train-layout .architecture-panel,
+.train-layout .choice-block {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.train-layout .probe-switch > label > input,
+.train-layout .variant-options input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  pointer-events: none;
+}
+
+.train-layout .number-control button,
+.train-layout .number-control input {
+  border-radius: 0;
+}

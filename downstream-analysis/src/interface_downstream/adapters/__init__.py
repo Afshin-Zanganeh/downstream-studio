@@ -1,0 +1,2 @@
+"""Optional input/output adapters."""
+
