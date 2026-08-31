@@ -20,11 +20,16 @@
 .progress-detail strong { color:var(--ink); }
 
 .target-ranking { margin:28px 0 18px; }
-.ranking-head { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; padding-bottom:18px; border-bottom:1px solid var(--line); }
-.ranking-head>div:first-child { min-width:0; }
-.ranking-head>div:first-child>p:last-child { max-width:680px; margin-top:7px; color:var(--muted); font-size:11px; line-height:1.5; }
-.ranking-filters { width:min(420px,44%); display:grid; grid-template-columns:1fr 1fr; gap:10px; flex:0 0 auto; }
-.target-ranking-chart { margin-top:14px; border-bottom:1px solid var(--line); }
+.ranking-title { padding-bottom:12px; border-bottom:1px solid var(--line); }
+.ranking-title h2 { font-size:17px; }
+.ranking-chart-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:12px; }
+.ranking-metric-chart { min-width:0; overflow:hidden; border:1px solid var(--line); background:#fbfcfd; }
+.ranking-metric-chart header { min-height:48px; padding:10px 12px; display:flex; align-items:center; justify-content:space-between; gap:10px; border-bottom:1px solid var(--line); background:#fff; }
+.ranking-metric-chart h3 { font-size:13px; }
+.ranking-metric-chart header span { color:var(--muted); font-size:9px; white-space:nowrap; }
+.ranking-metric-chart.r2 { border-top:3px solid #52679c; }
+.ranking-metric-chart.pearson { border-top:3px solid #56806a; }
+.ranking-metric-chart.mae_over_target_std { border-top:3px solid #b56f4f; }
 .ranking-table { margin-top:16px; overflow:auto; border:1px solid var(--line); }
 .ranking-table table { width:100%; border-collapse:collapse; white-space:nowrap; font-size:11px; }
 .ranking-table th,.ranking-table td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; }
@@ -45,13 +50,10 @@
 .metric-insight>small { margin-top:5px; color:var(--forest); font-size:11px; font-weight:700; }
 .metric-insight>p { margin-top:12px; color:var(--muted); font-size:11px; line-height:1.45; }
 
-.metric-chart-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
-.diagnostic-chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
-.result-chart { min-height:320px; overflow:hidden; }
-.compact-chart { min-height:300px; padding:18px; }
-.compact-chart .section-head { min-height:36px; margin-bottom:10px; }
-.compact-chart .section-head h2 { font-size:15px; }
-.chart-empty { height:220px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--muted); font-size:12px; border:1px dashed var(--line-strong); }
+.chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.chart-grid>.result-chart:nth-child(3) { grid-column:1/-1; }
+.result-chart { min-height:370px; overflow:hidden; }
+.chart-empty { height:280px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--muted); font-size:12px; border:1px dashed var(--line-strong); }
 .recharts-default-tooltip { border:1px solid var(--line)!important; box-shadow:none!important; font-size:11px!important; }
 .metrics-panel { margin-top:12px; }
 .metric-guide { display:flex; gap:18px; margin:-7px 0 14px; color:var(--muted); font-size:11px; }
@@ -187,21 +189,17 @@
 
 @media(max-width:1100px) {
   .insight-grid { grid-template-columns:1fr 1fr; }
-  .metric-chart-grid { grid-template-columns:1fr 1fr; }
-  .metric-chart-grid>.result-chart:nth-child(3) { grid-column:1/-1; }
-  .diagnostic-chart-grid { grid-template-columns:1fr; }
+  .ranking-chart-grid { grid-template-columns:1fr; }
+  .chart-grid { grid-template-columns:1fr; }
+  .chart-grid>.result-chart:nth-child(3) { grid-column:auto; }
   .hpc-layout { grid-template-columns:1fr; }
 }
 @media(max-width:700px) {
   .progress-main { grid-template-columns:36px 1fr; }
   .progress-time { grid-column:2; text-align:left; }
   .progress-detail,.results-toolbar { align-items:stretch; flex-direction:column; }
-  .ranking-head { align-items:stretch; flex-direction:column; }
-  .ranking-filters { width:100%; grid-template-columns:1fr; }
   .results-toolbar label { width:100%; }
   .insight-grid { grid-template-columns:1fr; }
-  .metric-chart-grid { grid-template-columns:1fr; }
-  .metric-chart-grid>.result-chart:nth-child(3) { grid-column:auto; }
   .metric-insight { min-height:0; }
   .log-events>div { grid-template-columns:14px 1fr; padding:9px 0; }
   .log-events>div>div:last-child { grid-column:2; text-align:left; }
