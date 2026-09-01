@@ -62,7 +62,7 @@ features.
 
 ```bash
 interface-probes \
-  --embeddings '/data/horse/ws/lubu348b-plip_graph/embeddings/runs/af_random_100k_mixed/*.csv' \
+  --embeddings '/path/to/af_random_100k_mixed/*/embeddings*.csv' \
   --targets-csv interface_features.csv \
   --output-dir results \
   --id-column id \
@@ -76,7 +76,7 @@ To reproduce a 50/50, 1500-epoch linear-probe experiment:
 
 ```bash
 interface-probes \
-  --embeddings '/data/horse/ws/lubu348b-plip_graph/embeddings/runs/af_random_100k_mixed/*.csv' \
+  --embeddings '/path/to/af_random_100k_mixed/*/embeddings*.csv' \
   --targets-csv interface_features.csv \
   --output-dir results \
   --probes linear \

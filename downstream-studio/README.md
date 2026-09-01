@@ -49,10 +49,10 @@ downstream probes on biological interface embeddings.
 Install the analysis engine and Studio in the same Python environment:
 
 ```bash
-cd /Users/divar/Documents/biotech/downstream-analysis
+cd /path/to/downstream-studio/downstream-analysis
 python3 -m pip install -e '.[csv]'
 
-cd /Users/divar/Documents/biotech/downstream-studio
+cd /path/to/downstream-studio/downstream-studio
 python3 -m pip install -e .
 ```
 
@@ -60,8 +60,8 @@ Start the application:
 
 ```bash
 downstream-studio \
-  --workspace /Users/divar/Documents/biotech/downstream-studio-data \
-  --browse-root /Users/divar/Documents/biotech \
+  --workspace /path/to/downstream-studio-data \
+  --browse-root /path/to/data \
   --host 127.0.0.1 \
   --port 8765
 ```
@@ -87,13 +87,13 @@ Only configured roots and their descendants are visible through the API.
 2. Register the embeddings directory:
 
    ```text
-   /Users/divar/Documents/biotech/af_random_100k_mixed
+   /path/to/af_random_100k_mixed
    ```
 
 3. Register the target file:
 
    ```text
-   /Users/divar/Documents/biotech/interface_af_features.csv
+   /path/to/interface_af_features.csv
    ```
 
 4. Open **New experiment**, choose models and fields, configure training, and
@@ -143,7 +143,7 @@ After installing and starting Studio on a Barnard allocation or trusted login
 environment, bind to localhost and forward the port from your Mac:
 
 ```bash
-ssh -L 8765:127.0.0.1:8765 afza787g@login1.barnard.hpc.tu-dresden.de
+ssh -L 8765:127.0.0.1:8765 your-zih-username@login1.barnard.hpc.tu-dresden.de
 ```
 
 Then open <http://127.0.0.1:8765> locally. For production HPC use, implement
