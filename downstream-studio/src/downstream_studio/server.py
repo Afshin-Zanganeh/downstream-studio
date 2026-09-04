@@ -238,6 +238,9 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 finally:
                     client.close()
+                profile = self.app.store.get_hpc_connection(match.group(1))
+                metadata["hpc_host"] = profile["host"] if profile else ""
+                metadata["cluster"] = "capella" if profile and ".capella." in profile["host"] else "barnard"
                 dataset = self.app.store.create_dataset(
                     match.group(1), body.get("name") or Path(body["path"]).name, body["kind"], "path", body["path"],
                     body.get("id_column", "id"), body.get("feature_prefix", "f"), metadata,
@@ -447,6 +450,11 @@ class Handler(BaseHTTPRequestHandler):
             profile = self.app.store.get_hpc_connection(embeddings["project_id"])
             if not profile or not profile.get("worker_version"):
                 raise ValueError("Connect to the HPC and deploy the worker before starting remote training")
+            if embeddings["metadata"].get("hpc_host") != targets["metadata"].get("hpc_host"):
+                raise ValueError("Remote embeddings and targets must be registered through the same HPC connection")
+            cluster = "capella" if ".capella." in profile["host"] else "barnard"
+            if config.get("slurm", {}).get("partition", cluster) != cluster:
+                raise ValueError(f"The {cluster} login connection can submit only to the {cluster} Slurm scheduler")
         elif execution_target == "local" and (embedding_remote or target_remote):
             raise ValueError("Remote datasets must be trained with the HPC execution target")
         else:
