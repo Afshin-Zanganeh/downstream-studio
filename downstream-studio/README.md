@@ -118,11 +118,10 @@ HPC usage, put it in a workspace directory with suitable quota and permissions.
 
 ## Architecture and scaling
 
-The browser communicates with a small REST server. Training is executed in a
-separate Python process, so a failed or memory-intensive run does not take down
-the interface. `RunManager` is the executor boundary. A Slurm executor can be
-added alongside the local executor to generate `sbatch` scripts, persist job
-IDs, poll `squeue`/`sacct`, and collect the same output artifacts.
+The browser communicates with a small local REST server. `RunManager` selects a
+local subprocess or the outbound SSH/Slurm executor. The latter uploads bounded
+job descriptions, persists Slurm job IDs, polls `squeue`/`sacct`, and collects
+the same result summaries without opening a web port on the HPC.
 
 This initial release is intended for one trusted user on localhost or through
 an SSH tunnel. It has no authentication and must not be exposed directly to the
@@ -137,15 +136,36 @@ large redundant in-memory and CSV outputs. The dashboard defaults to batch size
 4096 and 50–100 epochs because the interface experiments observed so far mostly
 plateau in that range; both remain configurable.
 
-## Barnard access through an SSH tunnel
+## Outbound SSH and Slurm execution
 
-After installing and starting Studio on a Barnard allocation or trusted login
-environment, bind to localhost and forward the port from your Mac:
+Studio can remain on the local workstation while datasets and computation stay
+on TU Dresden HPC. No Studio web server or inbound port is opened there.
 
-```bash
-ssh -L 8765:127.0.0.1:8765 your-zih-username@login1.barnard.hpc.tu-dresden.de
-```
+1. Create an ED25519 SSH key with a passphrase, install its public key on the
+   HPC, and load the private key into the local SSH agent.
+2. In **HPC setup**, select a Barnard or Capella login node, choose **SSH
+   agent**, enter the ZIH username, and test the connection.
+3. Set **Remote Python** to a Python 3.10+ executable available on login and
+   compute nodes. Click **Deploy worker**. Studio creates:
 
-Then open <http://127.0.0.1:8765> locally. For production HPC use, implement
-the Slurm executor rather than performing training inside the web-server
-process or on a login node.
+   ```text
+   ~/.downstream-studio/worker/
+   ~/.downstream-studio/jobs/
+   ~/.downstream-studio/results/
+   ```
+
+   Deployment uploads a versioned source archive, creates a private virtual
+   environment, and installs `downstream-analysis[csv]`. The first deployment
+   can take several minutes while PyTorch and pandas are installed remotely.
+4. In **Data**, choose **HPC path** and register the embeddings directory and
+   target CSV. Only schema information and bounded sample rows cross SSH.
+5. In **Train**, choose **HPC via Slurm**, select the partition and resources,
+   and submit the experiment.
+6. Experiment pages monitor Slurm, stream the log, and copy result summaries to
+   the local workspace. Predictions are copied only after completion and only
+   below 100 MB; larger files remain on HPC.
+
+Remote dataset transformations are intentionally disabled. Register original
+remote files and select target fields in the experiment builder. Shell-sensitive
+values are validated, remote directories use user-only permissions, and the
+worker provides no arbitrary command endpoint.

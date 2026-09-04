@@ -86,6 +86,17 @@ class Store:
                 );
                 """
             )
+            self._add_column(db, "hpc_connections", "auth_method", "TEXT NOT NULL DEFAULT 'agent'")
+            self._add_column(db, "hpc_connections", "remote_python", "TEXT NOT NULL DEFAULT 'python3'")
+            self._add_column(db, "hpc_connections", "worker_version", "TEXT NOT NULL DEFAULT ''")
+            self._add_column(db, "experiments", "remote_job_id", "TEXT")
+            self._add_column(db, "experiments", "remote_output_dir", "TEXT")
+
+    @staticmethod
+    def _add_column(db: sqlite3.Connection, table: str, name: str, definition: str) -> None:
+        columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        if name not in columns:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
     @staticmethod
     def _row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
@@ -155,10 +166,11 @@ class Store:
         id_column: str, feature_prefix: str, metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         dataset_id = uuid.uuid4().hex[:12]
+        stored_path = str(path) if metadata.get("location") == "hpc" else str(path.resolve())
         with self.connect() as db:
             db.execute(
                 "INSERT INTO datasets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (dataset_id, project_id, name.strip(), kind, source_type, str(path.resolve()),
+                (dataset_id, project_id, name.strip(), kind, source_type, stored_path,
                  id_column, feature_prefix, json.dumps(metadata), now()),
             )
         return self.get_dataset(dataset_id)  # type: ignore[return-value]
@@ -216,16 +228,21 @@ class Store:
         with self.connect() as db:
             db.execute(
                 """INSERT INTO hpc_connections
-                   (project_id,name,host,port,username,remote_workspace,last_status,last_message,last_tested_at,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)
+                   (project_id,name,host,port,username,remote_workspace,last_status,last_message,last_tested_at,updated_at,
+                    auth_method,remote_python,worker_version)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(project_id) DO UPDATE SET
                      name=excluded.name, host=excluded.host, port=excluded.port,
                      username=excluded.username, remote_workspace=excluded.remote_workspace,
                      last_status=excluded.last_status, last_message=excluded.last_message,
-                     last_tested_at=excluded.last_tested_at, updated_at=excluded.updated_at""",
+                     last_tested_at=excluded.last_tested_at, updated_at=excluded.updated_at,
+                     auth_method=excluded.auth_method, remote_python=excluded.remote_python,
+                     worker_version=excluded.worker_version""",
                 (project_id, values.get("name", "TU Dresden Capella"), values["host"], int(values.get("port", 22)),
                  values["username"], values.get("remote_workspace", ""), values.get("last_status", "not_tested"),
-                 values.get("last_message", ""), values.get("last_tested_at"), timestamp),
+                 values.get("last_message", ""), values.get("last_tested_at"), timestamp,
+                 values.get("auth_method", "agent"), values.get("remote_python", "python3"),
+                 values.get("worker_version", "")),
             )
         return self.get_hpc_connection(project_id)  # type: ignore[return-value]
 
@@ -236,14 +253,17 @@ class Store:
         log_path = output_dir / "run.log"
         with self.connect() as db:
             db.execute(
-                "INSERT INTO experiments VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL)",
+                """INSERT INTO experiments
+                   (id,project_id,name,status,config_json,output_dir,log_path,pid,return_code,error,created_at,started_at,finished_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL)""",
                 (experiment_id, project_id, name.strip(), "queued", json.dumps(config),
                  str(output_dir), str(log_path), now()),
             )
         return self.get_experiment(experiment_id)  # type: ignore[return-value]
 
     def update_experiment(self, experiment_id: str, **values: Any) -> None:
-        allowed = {"status", "pid", "return_code", "error", "started_at", "finished_at"}
+        allowed = {"status", "pid", "return_code", "error", "started_at", "finished_at",
+                   "remote_job_id", "remote_output_dir"}
         values = {key: value for key, value in values.items() if key in allowed}
         if not values:
             return

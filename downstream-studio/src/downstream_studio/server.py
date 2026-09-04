@@ -15,24 +15,36 @@ from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .hpc import (
-    CAPELLA_HOSTS, TerminalSession, connect_client, forget_password as forget_saved_password,
+    HPC_HOSTS, connect_client, forget_password as forget_saved_password,
     load_password as load_saved_password, save_password as store_saved_password, test_connection,
 )
 from .inspect_csv import inspect_dataset
 from .runner import RunManager, read_csv_records
 from .store import Store, now
 from .transform_csv import apply_dataset_view, configure_dataset
+from .remote import browse_remote, deploy_worker, inspect_remote_dataset, preview_remote_csv, worker_status
 
 
 class StudioApp:
     def __init__(self, workspace: Path, browse_roots: Optional[list[Path]] = None):
         self.store = Store(workspace)
-        self.runs = RunManager(self.store)
         self.hpc_passwords: Dict[str, str] = {}
-        self.hpc_terminals: Dict[str, TerminalSession] = {}
+        self.runs = RunManager(self.store, self.hpc_client)
         self.web = Path(__file__).with_name("web")
         configured = browse_roots or [Path.cwd()]
         self.browse_roots = sorted({path.expanduser().resolve() for path in configured if path.expanduser().exists()})
+
+    def hpc_client(self, project_id: str):
+        profile = self.store.get_hpc_connection(project_id)
+        if not profile:
+            raise ValueError("Configure the HPC connection for this project first")
+        auth_method = profile.get("auth_method", "agent")
+        password = ""
+        if auth_method == "password":
+            password = self.hpc_passwords.get(project_id) or load_saved_password(
+                project_id, profile["host"], profile["username"]
+            ) or ""
+        return connect_client(profile["host"], int(profile["port"]), profile["username"], password, auth_method)
 
     def browse(self, requested: Optional[str]) -> Dict[str, Any]:
         if not self.browse_roots:
@@ -117,22 +129,27 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.app.store.get_project(project_id):
                     return self.send_json({"error": "Project not found"}, 404)
                 profile = self.app.store.get_hpc_connection(project_id) or {
-                    "project_id": project_id, "name": "TU Dresden Capella",
-                    "host": "login1.capella.hpc.tu-dresden.de", "port": 22,
+                    "project_id": project_id, "name": "TU Dresden HPC",
+                    "host": "login1.barnard.hpc.tu-dresden.de", "port": 22,
                     "username": "", "remote_workspace": "", "last_status": "not_tested",
-                    "last_message": "", "last_tested_at": None,
+                    "last_message": "", "last_tested_at": None, "auth_method": "agent",
+                    "remote_python": "python3", "worker_version": "",
                 }
                 saved_password = load_saved_password(project_id, profile["host"], profile["username"])
                 if saved_password and project_id not in self.app.hpc_passwords:
                     self.app.hpc_passwords[project_id] = saved_password
-                profile["credential_available"] = project_id in self.app.hpc_passwords
+                profile["credential_available"] = profile.get("auth_method") == "agent" or project_id in self.app.hpc_passwords
                 profile["credential_saved"] = bool(saved_password)
-                profile["allowed_hosts"] = sorted(CAPELLA_HOSTS)
+                profile["allowed_hosts"] = sorted(HPC_HOSTS)
                 return self.send_json(profile)
-            match = re.fullmatch(r"/api/projects/([\w-]+)/hpc/terminal/output", route)
+            match = re.fullmatch(r"/api/projects/([\w-]+)/hpc/files", route)
             if match:
                 query = parse_qs(parsed.query)
-                return self.hpc_terminal_output(match.group(1), query)
+                client = self.app.hpc_client(match.group(1))
+                try:
+                    return self.send_json(browse_remote(client, query.get("path", [None])[0]))
+                finally:
+                    client.close()
             match = re.fullmatch(r"/api/projects/([\w-]+)", route)
             if match:
                 project = self.app.store.get_project(match.group(1))
@@ -147,6 +164,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.preview_dataset(match.group(1), query.get("file", [None])[0])
             match = re.fullmatch(r"/api/experiments/([\w-]+)", route)
             if match:
+                self.app.runs.refresh_remote(match.group(1))
                 experiment = self.app.store.get_experiment(match.group(1))
                 if not experiment:
                     return self.send_json({"error": "Experiment not found"}, 404)
@@ -190,15 +208,15 @@ class Handler(BaseHTTPRequestHandler):
             match = re.fullmatch(r"/api/projects/([\w-]+)/hpc/test", route)
             if match:
                 return self.test_hpc_connection(match.group(1))
+            match = re.fullmatch(r"/api/projects/([\w-]+)/hpc/deploy", route)
+            if match:
+                return self.deploy_hpc_worker(match.group(1))
             match = re.fullmatch(r"/api/projects/([\w-]+)/hpc/disconnect", route)
             if match:
                 return self.disconnect_hpc(match.group(1))
             match = re.fullmatch(r"/api/projects/([\w-]+)/hpc/forget", route)
             if match:
                 return self.forget_hpc_password(match.group(1))
-            match = re.fullmatch(r"/api/projects/([\w-]+)/hpc/terminal/(start|input|resize|close)", route)
-            if match:
-                return self.hpc_terminal_action(match.group(1), match.group(2))
             match = re.fullmatch(r"/api/projects/([\w-]+)/datasets/path", route)
             if match:
                 body = self.json_body()
@@ -207,6 +225,21 @@ class Handler(BaseHTTPRequestHandler):
                 path = Path(metadata["files"][0]["path"] if kind == "targets" else body["path"]).expanduser()
                 dataset = self.app.store.create_dataset(
                     match.group(1), body.get("name") or path.name, kind, "path", path,
+                    body.get("id_column", "id"), body.get("feature_prefix", "f"), metadata,
+                )
+                return self.send_json(dataset, 201)
+            match = re.fullmatch(r"/api/projects/([\w-]+)/datasets/hpc", route)
+            if match:
+                body = self.json_body()
+                client = self.app.hpc_client(match.group(1))
+                try:
+                    metadata = inspect_remote_dataset(
+                        client, body["kind"], body["path"], body.get("id_column", "id"), body.get("feature_prefix", "f")
+                    )
+                finally:
+                    client.close()
+                dataset = self.app.store.create_dataset(
+                    match.group(1), body.get("name") or Path(body["path"]).name, body["kind"], "path", body["path"],
                     body.get("id_column", "id"), body.get("feature_prefix", "f"), metadata,
                 )
                 return self.send_json(dataset, 201)
@@ -245,9 +278,6 @@ class Handler(BaseHTTPRequestHandler):
                 project = self.app.store.delete_project(project_id)
                 if not project:
                     return self.send_json({"error": "Project not found"}, 404)
-                terminal = self.app.hpc_terminals.pop(project_id, None)
-                if terminal:
-                    terminal.close()
                 self.app.hpc_passwords.pop(project_id, None)
                 credential_warning = None
                 if profile:
@@ -319,29 +349,33 @@ class Handler(BaseHTTPRequestHandler):
         host = str(body.get("host", "")).strip()
         username = str(body.get("username", "")).strip()
         password = str(body.get("password", ""))
+        auth_method = str(body.get("auth_method", "agent"))
         port = int(body.get("port", 22))
         if port < 1 or port > 65535:
             raise ValueError("SSH port must be between 1 and 65535")
         profile = {
-            "name": "TU Dresden Capella", "host": host, "port": port, "username": username,
-            "remote_workspace": str(body.get("remote_workspace", "")).strip(),
+            "name": "TU Dresden HPC", "host": host, "port": port, "username": username,
+            "remote_workspace": "~/.downstream-studio", "auth_method": auth_method,
+            "remote_python": str(body.get("remote_python", "python3")).strip() or "python3",
+            "worker_version": str(body.get("worker_version", "")),
             "last_status": "testing", "last_message": "Testing SSH authentication", "last_tested_at": now(),
         }
-        if not password:
+        if auth_method == "password" and not password:
             password = self.app.hpc_passwords.get(project_id) or load_saved_password(project_id, host, username) or ""
-        if not password:
+        if auth_method == "password" and not password:
             raise ValueError("Enter your ZIH password or save one in the operating-system credential store")
         self.app.store.save_hpc_connection(project_id, profile)
         try:
-            details = test_connection(host, port, username, password)
+            details = test_connection(host, port, username, password, auth_method)
         except Exception as error:
             profile.update(last_status="failed", last_message=str(error), last_tested_at=now())
             self.app.store.save_hpc_connection(project_id, profile)
             raise
-        self.app.hpc_passwords[project_id] = password
+        if password:
+            self.app.hpc_passwords[project_id] = password
         credential_saved = bool(load_saved_password(project_id, host, username))
         save_warning = ""
-        if body.get("save_password", True):
+        if auth_method == "password" and body.get("save_password", True):
             try:
                 store_saved_password(project_id, host, username, password)
                 credential_saved = True
@@ -349,13 +383,35 @@ class Handler(BaseHTTPRequestHandler):
                 save_warning = str(error)
         profile.update(last_status="connected", last_message=f"Connected to {details['hostname']}", last_tested_at=now())
         saved = self.app.store.save_hpc_connection(project_id, profile)
-        return self.send_json({**saved, **details, "credential_available": True, "credential_saved": credential_saved, "save_warning": save_warning})
+        client = self.app.hpc_client(project_id)
+        try:
+            installed = worker_status(client)
+        finally:
+            client.close()
+        if installed.get("version") and installed["version"] != saved.get("worker_version"):
+            saved["worker_version"] = installed["version"]
+            saved = self.app.store.save_hpc_connection(project_id, saved)
+        return self.send_json({**saved, **details, **installed, "credential_available": True,
+                               "credential_saved": credential_saved, "save_warning": save_warning})
+
+    def deploy_hpc_worker(self, project_id: str) -> None:
+        profile = self.app.store.get_hpc_connection(project_id)
+        if not profile:
+            return self.send_json({"error": "Connect to the HPC before deploying the worker"}, 409)
+        client = self.app.hpc_client(project_id)
+        try:
+            deployed = deploy_worker(client, profile.get("remote_python", "python3"))
+        finally:
+            client.close()
+        profile["worker_version"] = deployed["version"]
+        profile["last_message"] = f"Worker {deployed['version']} deployed"
+        saved = self.app.store.save_hpc_connection(project_id, profile)
+        return self.send_json({**saved, **deployed, "installed": True})
 
     def disconnect_hpc(self, project_id: str) -> None:
         profile = self.app.store.get_hpc_connection(project_id)
         if not profile:
             return self.send_json({"error": "HPC connection is not configured"}, 404)
-        self.close_hpc_terminal(project_id)
         self.app.hpc_passwords.pop(project_id, None)
         profile.update(last_status="disconnected", last_message="Session credential removed", last_tested_at=now())
         saved = self.app.store.save_hpc_connection(project_id, profile)
@@ -365,55 +421,11 @@ class Handler(BaseHTTPRequestHandler):
         profile = self.app.store.get_hpc_connection(project_id)
         if not profile:
             return self.send_json({"error": "HPC connection is not configured"}, 404)
-        self.close_hpc_terminal(project_id)
         self.app.hpc_passwords.pop(project_id, None)
         forget_saved_password(project_id, profile["host"], profile["username"])
         profile.update(last_status="disconnected", last_message="Saved credential removed", last_tested_at=now())
         saved = self.app.store.save_hpc_connection(project_id, profile)
         return self.send_json({**saved, "credential_available": False, "credential_saved": False})
-
-    def hpc_terminal_action(self, project_id: str, action: str) -> None:
-        if action == "start":
-            profile = self.app.store.get_hpc_connection(project_id)
-            password = self.app.hpc_passwords.get(project_id)
-            if not profile or not password:
-                return self.send_json({"error": "Connect to Capella before opening a terminal"}, 409)
-            body = self.json_body()
-            self.close_hpc_terminal(project_id)
-            client = connect_client(profile["host"], int(profile["port"]), profile["username"], password)
-            session = TerminalSession(
-                client, profile.get("remote_workspace", ""),
-                int(body.get("cols", 120)), int(body.get("rows", 32)),
-            )
-            self.app.hpc_terminals[project_id] = session
-            return self.send_json({"session_id": session.id, "cursor": 0})
-        session = self.app.hpc_terminals.get(project_id)
-        body = self.json_body()
-        if not session or body.get("session_id") != session.id:
-            return self.send_json({"error": "Terminal session not found"}, 404)
-        if action == "input":
-            data = str(body.get("data", ""))
-            if len(data) > 16_384:
-                raise ValueError("Terminal input is too large")
-            session.write(data)
-            return self.send_json({"ok": True})
-        if action == "resize":
-            session.resize(int(body.get("cols", 120)), int(body.get("rows", 32)))
-            return self.send_json({"ok": True})
-        self.close_hpc_terminal(project_id)
-        return self.send_json({"closed": True})
-
-    def hpc_terminal_output(self, project_id: str, query: Dict[str, Any]) -> None:
-        session = self.app.hpc_terminals.get(project_id)
-        session_id = query.get("session_id", [""])[0]
-        if not session or session.id != session_id:
-            return self.send_json({"error": "Terminal session not found"}, 404)
-        return self.send_json(session.read(int(query.get("cursor", [0])[0])))
-
-    def close_hpc_terminal(self, project_id: str) -> None:
-        session = self.app.hpc_terminals.pop(project_id, None)
-        if session:
-            session.close()
 
     def validate_experiment(self, config: Dict[str, Any]) -> None:
         embeddings = self.app.store.get_dataset(config.get("embeddings_dataset_id", ""))
@@ -424,6 +436,22 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Select a valid targets dataset")
         if embeddings["project_id"] != targets["project_id"]:
             raise ValueError("Datasets must belong to the same project")
+        execution_target = config.get("execution_target", "local")
+        embedding_remote = embeddings.get("metadata", {}).get("location") == "hpc"
+        target_remote = targets.get("metadata", {}).get("location") == "hpc"
+        if execution_target == "hpc":
+            if not embedding_remote or not target_remote:
+                raise ValueError("HPC experiments require both datasets to be registered from HPC storage")
+            if embeddings.get("metadata", {}).get("view") or targets.get("metadata", {}).get("view"):
+                raise ValueError("Edited remote dataset views are not supported yet; register the original HPC files")
+            profile = self.app.store.get_hpc_connection(embeddings["project_id"])
+            if not profile or not profile.get("worker_version"):
+                raise ValueError("Connect to the HPC and deploy the worker before starting remote training")
+        elif execution_target == "local" and (embedding_remote or target_remote):
+            raise ValueError("Remote datasets must be trained with the HPC execution target")
+        else:
+            if execution_target not in {"local", "hpc"}:
+                raise ValueError("Execution target must be local or HPC")
         selected = config.get("target_columns", [])
         available = set(targets["metadata"].get("target_columns", []))
         if not selected or not set(selected) <= available:
@@ -462,6 +490,24 @@ class Handler(BaseHTTPRequestHandler):
         dataset = self.app.store.get_dataset(dataset_id)
         if not dataset:
             return self.send_json({"error": "Dataset not found"}, 404)
+        if dataset.get("metadata", {}).get("location") == "hpc":
+            files = dataset["metadata"].get("files", [])
+            selected = requested_file or (files[0]["path"] if files else dataset["path"])
+            if selected not in {item["path"] for item in files}:
+                return self.send_json({"error": "Dataset file not found"}, 404)
+            client = self.app.hpc_client(dataset["project_id"])
+            try:
+                preview = preview_remote_csv(client, selected)
+            finally:
+                client.close()
+            preview.update({
+                "name": dataset["name"], "files": [{"name": item["filename"], "path": item["path"],
+                "size_bytes": item["size_bytes"]} for item in files],
+                "editor_columns": preview["columns"], "editor_selected": preview["columns"],
+                "editor_renames": {}, "editor_id_column": dataset["id_column"], "editor_rows": preview["rows"],
+                "remote": True,
+            })
+            return self.send_json(preview)
         files = [Path(item["path"]).expanduser().resolve() for item in dataset.get("metadata", {}).get("files", [])]
         files = [path for path in files if path.is_file()]
         if not files:
@@ -568,8 +614,6 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        for session in list(app.hpc_terminals.values()):
-            session.close()
         server.server_close()
 
 

@@ -3,13 +3,8 @@
 from __future__ import annotations
 
 import base64
-import codecs
 import hashlib
-import shlex
 import socket
-import threading
-import time
-import uuid
 from typing import Any, Dict, Optional
 
 import paramiko
@@ -21,10 +16,26 @@ CAPELLA_HOSTS = {
     "login1.capella.hpc.tu-dresden.de",
     "login2.capella.hpc.tu-dresden.de",
 }
+BARNARD_HOSTS = {
+    "login1.barnard.hpc.tu-dresden.de",
+    "login2.barnard.hpc.tu-dresden.de",
+    "login3.barnard.hpc.tu-dresden.de",
+    "login4.barnard.hpc.tu-dresden.de",
+}
 CAPELLA_HOST_KEY_FINGERPRINTS = {
     "SHA256:wc0g+OaX+4XzVvfSk0OwXu92kKxsBh+9ou4ErTl8Omg",  # RSA
     "SHA256:zZiM3YZ0HBK6nxBS5VuJUwudmrDn/A7ajU1ec6vgVkU",  # ED25519
     "SHA256:1bQ0RhIIwvl+GpsW53KncPn+2z/f149WAwK5wipEgx8",  # ECDSA
+}
+BARNARD_HOST_KEY_FINGERPRINTS = {
+    "SHA256:lVQOvnci07jkxmFnX58pQf3cD7lz1mf4K4b9jZrAlVU",  # RSA
+    "SHA256:Gn4n5IX9eEvkpOGrtZzs9T9yAfJUB200bgRchchiKAQ",  # ED25519
+    "SHA256:Xan2MYazewT0V5agNazaQfWzLKBD3P48zRwR6reoXhI",  # ECDSA
+}
+HPC_HOSTS = CAPELLA_HOSTS | BARNARD_HOSTS
+PUBLISHED_HOST_KEYS = {
+    **{host: CAPELLA_HOST_KEY_FINGERPRINTS for host in CAPELLA_HOSTS},
+    **{host: BARNARD_HOST_KEY_FINGERPRINTS for host in BARNARD_HOSTS},
 }
 KEYRING_SERVICE = "Downstream Studio · HPC"
 
@@ -63,37 +74,48 @@ def sha256_fingerprint(key: paramiko.PKey) -> str:
     return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
 
 
-class PublishedCapellaHostKeyPolicy(paramiko.MissingHostKeyPolicy):
+class PublishedHpcHostKeyPolicy(paramiko.MissingHostKeyPolicy):
     def missing_host_key(self, client: paramiko.SSHClient, hostname: str, key: paramiko.PKey) -> None:
-        if hostname not in CAPELLA_HOSTS or sha256_fingerprint(key) not in CAPELLA_HOST_KEY_FINGERPRINTS:
-            raise paramiko.SSHException("The SSH host key does not match TU Dresden's published Capella fingerprint")
+        if hostname not in HPC_HOSTS or sha256_fingerprint(key) not in PUBLISHED_HOST_KEYS[hostname]:
+            raise paramiko.SSHException("The SSH host key does not match TU Dresden's published fingerprint")
         client.get_host_keys().add(hostname, key.get_name(), key)
 
 
-def connect_client(host: str, port: int, username: str, password: str) -> paramiko.SSHClient:
-    if host not in CAPELLA_HOSTS:
-        raise ValueError("Choose one of the official Capella login nodes")
-    if not username.strip() or not password:
-        raise ValueError("ZIH username and password are required")
+def connect_client(
+    host: str, port: int, username: str, password: str = "", auth_method: str = "agent"
+) -> paramiko.SSHClient:
+    if host not in HPC_HOSTS:
+        raise ValueError("Choose one of the approved TU Dresden login nodes")
+    if not username.strip():
+        raise ValueError("A ZIH username is required")
+    if auth_method not in {"agent", "password"}:
+        raise ValueError("Authentication must use SSH agent or password")
+    if auth_method == "password" and not password:
+        raise ValueError("A ZIH password is required for password authentication")
     client = paramiko.SSHClient()
     client.load_system_host_keys()
-    client.set_missing_host_key_policy(PublishedCapellaHostKeyPolicy())
+    client.set_missing_host_key_policy(PublishedHpcHostKeyPolicy())
     try:
         client.connect(
-            hostname=host, port=port, username=username.strip(), password=password,
-            look_for_keys=False, allow_agent=False, timeout=12, auth_timeout=20, banner_timeout=12,
+            hostname=host, port=port, username=username.strip(),
+            password=password if auth_method == "password" else None,
+            look_for_keys=auth_method == "agent", allow_agent=auth_method == "agent",
+            timeout=12, auth_timeout=20, banner_timeout=12,
         )
         return client
     except (paramiko.AuthenticationException, paramiko.BadAuthenticationType) as error:
         client.close()
-        raise ValueError("Authentication failed. Check your ZIH username, password, and VPN connection.") from error
+        detail = "SSH agent/key" if auth_method == "agent" else "password"
+        raise ValueError(f"Authentication failed. Check your ZIH username, {detail}, and VPN connection.") from error
     except (socket.timeout, socket.gaierror, paramiko.SSHException, OSError) as error:
         client.close()
-        raise ConnectionError(f"Could not establish the Capella SSH connection: {error}") from error
+        raise ConnectionError(f"Could not establish the HPC SSH connection: {error}") from error
 
 
-def test_connection(host: str, port: int, username: str, password: str) -> Dict[str, Any]:
-    client = connect_client(host, port, username, password)
+def test_connection(
+    host: str, port: int, username: str, password: str = "", auth_method: str = "agent"
+) -> Dict[str, Any]:
+    client = connect_client(host, port, username, password, auth_method)
     try:
         _, stdout, stderr = client.exec_command("hostname; id -un; command -v sbatch >/dev/null && echo slurm-ready", timeout=12)
         output = stdout.read().decode("utf-8", errors="replace").splitlines()
@@ -108,62 +130,3 @@ def test_connection(host: str, port: int, username: str, password: str) -> Dict[
         }
     finally:
         client.close()
-
-
-class TerminalSession:
-    """One bounded interactive SSH pseudo-terminal."""
-
-    max_output = 1_000_000
-
-    def __init__(self, client: paramiko.SSHClient, remote_workspace: str = "", cols: int = 120, rows: int = 32):
-        self.id = uuid.uuid4().hex[:16]
-        self.client = client
-        self.channel = client.invoke_shell(term="xterm-256color", width=cols, height=rows)
-        self.output = ""
-        self.base_cursor = 0
-        self.lock = threading.Lock()
-        self.closed = False
-        self.last_activity = time.time()
-        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        if remote_workspace:
-            self.channel.send(f"cd -- {shlex.quote(remote_workspace)}\n")
-        self.reader = threading.Thread(target=self._read_loop, daemon=True)
-        self.reader.start()
-
-    def _read_loop(self) -> None:
-        try:
-            while not self.channel.closed:
-                if self.channel.recv_ready():
-                    text = self.decoder.decode(self.channel.recv(32768))
-                    with self.lock:
-                        self.output += text
-                        if len(self.output) > self.max_output:
-                            removed = len(self.output) - self.max_output
-                            self.output = self.output[removed:]
-                            self.base_cursor += removed
-                    self.last_activity = time.time()
-                else:
-                    time.sleep(0.03)
-        finally:
-            self.closed = True
-
-    def read(self, cursor: int) -> Dict[str, Any]:
-        with self.lock:
-            start = max(0, cursor - self.base_cursor)
-            data = self.output[start:]
-            next_cursor = self.base_cursor + len(self.output)
-        return {"data": data, "cursor": next_cursor, "closed": self.closed or self.channel.closed}
-
-    def write(self, data: str) -> None:
-        if self.closed or self.channel.closed:
-            raise ConnectionError("The terminal session is closed")
-        self.channel.send(data)
-        self.last_activity = time.time()
-
-    def resize(self, cols: int, rows: int) -> None:
-        self.channel.resize_pty(width=max(20, min(cols, 500)), height=max(5, min(rows, 200)))
-
-    def close(self) -> None:
-        self.closed = True
-        self.channel.close()
-        self.client.close()

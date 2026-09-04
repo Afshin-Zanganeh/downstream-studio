@@ -10,15 +10,19 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
+
+import paramiko
 
 from .store import Store, now
 from .transform_csv import materialize_dataset_view
+from .remote import cancel_job, job_state, submit_job, sync_results
 
 
 class RunManager:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, remote_client: Optional[Callable[[str], paramiko.SSHClient]] = None):
         self.store = store
+        self.remote_client = remote_client
         self.processes: Dict[str, subprocess.Popen] = {}
         self.lock = threading.Lock()
 
@@ -68,8 +72,62 @@ class RunManager:
         experiment = self.store.get_experiment(experiment_id)
         if not experiment or experiment["status"] != "queued":
             raise ValueError("Experiment is missing or is not queued")
-        thread = threading.Thread(target=self._execute, args=(experiment_id,), daemon=True)
+        target = self._submit_remote if experiment["config"].get("execution_target") == "hpc" else self._execute
+        thread = threading.Thread(target=target, args=(experiment_id,), daemon=True)
         thread.start()
+
+    def _submit_remote(self, experiment_id: str) -> None:
+        experiment = self.store.get_experiment(experiment_id)
+        if not experiment or not self.remote_client:
+            self.store.update_experiment(experiment_id, status="failed", error="HPC execution is not configured", finished_at=now())
+            return
+        client = None
+        try:
+            embeddings = self.store.get_dataset(experiment["config"]["embeddings_dataset_id"])
+            targets = self.store.get_dataset(experiment["config"]["targets_dataset_id"])
+            if not embeddings or not targets:
+                raise ValueError("An input dataset no longer exists")
+            client = self.remote_client(experiment["project_id"])
+            submitted = submit_job(client, experiment, embeddings, targets)
+            self.store.update_experiment(
+                experiment_id, status="queued", remote_job_id=submitted["job_id"],
+                remote_output_dir=submitted["remote_output_dir"], started_at=now(),
+            )
+        except Exception as error:
+            self.store.update_experiment(experiment_id, status="failed", error=str(error), finished_at=now())
+        finally:
+            if client:
+                client.close()
+
+    def refresh_remote(self, experiment_id: str) -> None:
+        experiment = self.store.get_experiment(experiment_id)
+        if not experiment or experiment["config"].get("execution_target") != "hpc" or not experiment.get("remote_job_id"):
+            return
+        if experiment["status"] not in {"queued", "running"}:
+            return
+        if not self.remote_client:
+            return
+        client = None
+        try:
+            client = self.remote_client(experiment["project_id"])
+            state = job_state(client, experiment["remote_job_id"])
+            sync_results(
+                client, experiment["remote_output_dir"], Path(experiment["output_dir"]),
+                include_predictions=state["status"] == "completed",
+            )
+            values: Dict[str, Any] = {"status": state["status"]}
+            if state["status"] in {"completed", "failed", "cancelled"}:
+                values["finished_at"] = now()
+                values["return_code"] = 0 if state["status"] == "completed" else 1
+                if state["status"] == "failed":
+                    values["error"] = f"Slurm job ended in state {state['state']} ({state.get('exit_code', '')})"
+            self.store.update_experiment(experiment_id, **values)
+        except Exception:
+            # A temporary VPN/SSH failure must not mark a healthy Slurm job failed.
+            return
+        finally:
+            if client:
+                client.close()
 
     def _execute(self, experiment_id: str) -> None:
         experiment = self.store.get_experiment(experiment_id)
@@ -102,6 +160,17 @@ class RunManager:
                 self.processes.pop(experiment_id, None)
 
     def cancel(self, experiment_id: str) -> bool:
+        experiment = self.store.get_experiment(experiment_id)
+        if experiment and experiment["config"].get("execution_target") == "hpc":
+            if not experiment.get("remote_job_id") or not self.remote_client:
+                return False
+            client = self.remote_client(experiment["project_id"])
+            try:
+                cancel_job(client, experiment["remote_job_id"])
+            finally:
+                client.close()
+            self.store.update_experiment(experiment_id, status="cancelled", finished_at=now())
+            return True
         with self.lock:
             process = self.processes.get(experiment_id)
         if not process or process.poll() is not None:
